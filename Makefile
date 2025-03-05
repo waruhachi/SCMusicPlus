@@ -1,18 +1,14 @@
-INSTALL_TARGET_PROCESSES = com.soundcloud.TouchApp
-
 ifeq ($(THEOS_PACKAGE_SCHEME),rootless)
-	ARCHS = arm64 arm64e
-	TARGET = iphone:clang:15.5:15.0
+	export ARCHS = arm64 arm64e
+	export TARGET = iphone:latest:14.0
 else
-	ARCHS = armv7 armv7s arm64 arm64e
-	TARGET = iphone:clang:14.2:7.0
+	export ARCHS = armv7 armv7s arm64 arm64e
+	export TARGET = iphone:clang:14.2:7.0
 endif
 
+INSTALL_TARGET_PROCESSES = com.soundcloud.TouchApp
+
+SUBPROJECTS += Tweak
+
 include $(THEOS)/makefiles/common.mk
-
-TWEAK_NAME = SCMusicPlus
-
-SCMusicPlus_FILES = Tweak.x
-SCMusicPlus_CFLAGS = -fobjc-arc
-
-include $(THEOS_MAKE_PATH)/tweak.mk
+include $(THEOS_MAKE_PATH)/aggregate.mk
