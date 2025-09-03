@@ -9,3 +9,4 @@ Depends: mobilesubstrate (>= 0.9.5000)
 Maintainer: waruhachi
 Architecture: iphoneos-arm
 Section: Tweaks
+Version: 24.9.2
