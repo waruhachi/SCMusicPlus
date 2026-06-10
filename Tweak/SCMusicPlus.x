@@ -17,6 +17,10 @@
 	return NO;
 }
 
+- (bool)shouldUpsellGoLite {
+	return NO;
+}
+
 - (bool)shouldUpsellForTrack:(id)arg1 {
 	return NO;
 }
@@ -44,6 +48,10 @@
 }
 
 - (bool)isOfflineSyncFeatureEnabled {
+	return YES;
+}
+
+- (bool)isSpotlightEditingEnabled {
 	return YES;
 }
 %end
@@ -90,6 +98,39 @@
 	arg12 = NO;
 	return %orig;
 }
+
+- (id)initWithUrn:(id)arg1
+			transcodings:(id)arg2
+			   streamURL:(id)arg3
+			 waveformURL:(id)arg4
+			   artistUrn:(id)arg5
+			  stationUrn:(id)arg6
+			  artistName:(id)arg7
+				   title:(id)arg8
+		  playQueueTitle:(id)arg9
+	playableDurationInMs:(unsigned long long)arg10
+		fullDurationInMs:(unsigned long long)arg11
+			 monetizable:(bool)arg12
+			   shareable:(bool)arg13
+			   isPrivate:(bool)arg14
+				 blocked:(bool)arg15
+				 snipped:(bool)arg16
+				syncable:(bool)arg17
+			  subMidTier:(bool)arg18
+			 subHighTier:(bool)arg19
+	   monetizationModel:(id)arg20
+				  policy:(id)arg21
+			analyticsBag:(id)arg22
+			  artworkUrn:(id)arg23
+				itemType:(long long)arg24
+		imageUrlTemplate:(id)arg25
+			 secretToken:(id)arg26
+	  playlistStationUrn:(id)arg27
+			permalinkURL:(id)arg28
+				   genre:(id)arg29 {
+	arg12 = NO;
+	return %orig;
+}
 %end
 
 %hook GoUpsellButtonViewWrapper
@@ -129,6 +170,47 @@
 - (bool)isItemMonetizable:(id)arg1 {
 	return NO;
 }
+
+- (bool)isPlaylistSponsoredFor:(id)arg1 {
+	return NO;
+}
+
+- (bool)isQueueStartAdEligibleForItem:(id)arg1
+						  interaction:(id)arg2
+					   taggingContext:(id)arg3 {
+	return NO;
+}
+
+- (bool)isTrackEligibleToServeAd:(id)arg1 for:(id)arg2 {
+	return NO;
+}
+
+- (bool)shouldFetchAdsBasedOnDuration:(double)arg1
+					 progressDuration:(double)arg2 {
+	return NO;
+}
+
+- (bool)shouldFetchQueueStartVideoAd {
+	return NO;
+}
+
+- (bool)shouldShowQueueStartVideoAdForItem:(id)arg1
+							   interaction:(id)arg2
+							taggingContext:(id)arg3 {
+	return NO;
+}
+%end
+
+%hook PromotedTrackChecker
+- (bool)isPromotedTrackFor:(id)arg1 with:(id)arg2 {
+	return NO;
+}
+%end
+
+%hook AudioAdPlayerViewController
+- (bool)shouldAddCompanionAd {
+	return NO;
+}
 %end
 
 %ctor {
@@ -144,5 +226,9 @@
 		DisplayAdBannerFeatureProvider =
 			objc_getClass("Ads.DisplayAdBannerFeatureProvider"),
 		AudioAdPlayerEventController =
-			objc_getClass("SoundCloud.AudioAdPlayerEventController"));
+			objc_getClass("SoundCloud.AudioAdPlayerEventController"),
+		PromotedTrackChecker =
+			objc_getClass("SoundCloud.PromotedTrackChecker"),
+		AudioAdPlayerViewController =
+			objc_getClass("AudioAdPlayerViewController"));
 }
