@@ -11,6 +11,18 @@ static BOOL SCMCTextContainsSponsoredMarker(NSString *text) {
 		[lowercased containsString:@"sponsored"];
 }
 
+static BOOL SCMCTextContainsTrackPlayerAdMarker(NSString *text) {
+	if (text.length == 0) {
+		return NO;
+	}
+
+	return [text containsString:@"_TtGC7SwiftUI14_UIHostingViewVS_7AnyView_"] ||
+		[text containsString:@"DisplayAdAditidebannerView"] ||
+		[text containsString:@"UIKitPlatformViewHost"] ||
+		[text containsString:@"PlatformViewRespresentableAdaptor"] ||
+		[text containsString:@"DisplayAd"];
+}
+
 static BOOL SCMCViewContainsSponsoredMarker(UIView *view) {
 	if (!view) {
 		return NO;
@@ -41,6 +53,55 @@ static BOOL SCMCViewContainsSponsoredMarker(UIView *view) {
 	}
 
 	return NO;
+}
+
+static void SCMCSetViewCollapsed(UIView *view);
+
+static BOOL SCMCViewContainsTrackPlayerAdMarker(UIView *view) {
+	if (!view) {
+		return NO;
+	}
+
+	if (SCMCTextContainsTrackPlayerAdMarker(NSStringFromClass(view.class))) {
+		return YES;
+	}
+
+	if (SCMCTextContainsTrackPlayerAdMarker(view.accessibilityLabel) ||
+		SCMCTextContainsTrackPlayerAdMarker(view.accessibilityValue) ||
+		SCMCTextContainsTrackPlayerAdMarker(view.accessibilityHint)) {
+		return YES;
+	}
+
+	if ([view isKindOfClass:[UILabel class]]) {
+		UILabel *label = (UILabel *)view;
+		if (SCMCTextContainsTrackPlayerAdMarker(label.text) ||
+			SCMCTextContainsTrackPlayerAdMarker(label.attributedText.string)) {
+			return YES;
+		}
+	}
+
+	for (UIView *subview in view.subviews) {
+		if (SCMCViewContainsTrackPlayerAdMarker(subview)) {
+			return YES;
+		}
+	}
+
+	return NO;
+}
+
+static void SCMCCollapseTrackPlayerAdViewsInView(UIView *view) {
+	if (!view) {
+		return;
+	}
+
+	for (UIView *subview in view.subviews) {
+		if (SCMCViewContainsTrackPlayerAdMarker(subview)) {
+			SCMCSetViewCollapsed(subview);
+			continue;
+		}
+
+		SCMCCollapseTrackPlayerAdViewsInView(subview);
+	}
 }
 
 static void SCMCSetViewCollapsed(UIView *view) {
@@ -82,6 +143,7 @@ static id (*SCMCOrigListCellPreferredLayoutAttributesFittingAttributes)(
 	id,
 	SEL,
 	id);
+static void (*SCMCOrigTrackPlayerViewControllerViewDidLayoutSubviews)(id, SEL);
 
 static CGSize SCMCPortalMarkerIntrinsicContentSize(id self, SEL _cmd) {
 	return CGSizeZero;
@@ -116,6 +178,11 @@ static void SCMCListCellLayoutSubviews(id self, SEL _cmd) {
 	if (SCMCShouldCollapseView(view)) {
 		SCMCSetViewCollapsed(view);
 	}
+}
+
+static void SCMCTrackPlayerViewControllerViewDidLayoutSubviews(id self, SEL _cmd) {
+	SCMCOrigTrackPlayerViewControllerViewDidLayoutSubviews(self, _cmd);
+	SCMCCollapseTrackPlayerAdViewsInView(((UIViewController *)self).view);
 }
 
 static id SCMCListCellPreferredLayoutAttributesFittingAttributes(id self, SEL _cmd, id layoutAttributes) {
@@ -205,6 +272,18 @@ static void SCMCInstallSponsoredViewBlockers(void) {
 				(id (*)(id, SEL, id))method_getImplementation(preferredLayoutAttributesMethod);
 			method_setImplementation(preferredLayoutAttributesMethod,
 				(IMP)SCMCListCellPreferredLayoutAttributesFittingAttributes);
+		}
+	}
+
+	Class trackPlayerViewController = objc_getClass("TrackPlayerViewController");
+	if (trackPlayerViewController) {
+		Method layoutSubviewsMethod = class_getInstanceMethod(
+			trackPlayerViewController, @selector(viewDidLayoutSubviews));
+		if (layoutSubviewsMethod) {
+			SCMCOrigTrackPlayerViewControllerViewDidLayoutSubviews =
+				(void (*)(id, SEL))method_getImplementation(layoutSubviewsMethod);
+			method_setImplementation(layoutSubviewsMethod,
+				(IMP)SCMCTrackPlayerViewControllerViewDidLayoutSubviews);
 		}
 	}
 }
