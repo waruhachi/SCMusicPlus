@@ -49,7 +49,7 @@
 %end
 
 %hook AdsRequestPermitter
-- (bool)shouldReuqestAds {
+- (bool)shouldRequestAds {
 	return NO;
 }
 %end
