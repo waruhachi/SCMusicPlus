@@ -1,4 +1,222 @@
+#import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+
+static BOOL SCMCStringContainsAnyToken(NSString *string, NSArray<NSString *> *tokens) {
+	if (![string isKindOfClass:[NSString class]] || string.length == 0) {
+		return NO;
+	}
+
+	NSString *lowercased = string.lowercaseString;
+	for (NSString *token in tokens) {
+		if ([lowercased containsString:token]) {
+			return YES;
+		}
+	}
+
+	return NO;
+}
+
+static BOOL SCMCURLIsConfigURL(NSURL *url) {
+	if (![url isKindOfClass:[NSURL class]]) {
+		return NO;
+	}
+
+	return [url.absoluteString containsString:@"/configuration/ios"];
+}
+
+static BOOL SCMCRequestIsConfigRequest(NSURLRequest *request) {
+	if (![request isKindOfClass:[NSURLRequest class]]) {
+		return NO;
+	}
+
+	return SCMCURLIsConfigURL(request.URL);
+}
+
+static id SCMCMutableJSONObject(id object) {
+	if ([object isKindOfClass:[NSDictionary class]]) {
+		NSMutableDictionary *mutableDictionary =
+			[NSMutableDictionary dictionaryWithCapacity:[(NSDictionary *)object count]];
+		[(NSDictionary *)object enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL *stop) {
+			mutableDictionary[key] = SCMCMutableJSONObject(value);
+		}];
+		return mutableDictionary;
+	}
+
+	if ([object isKindOfClass:[NSArray class]]) {
+		NSMutableArray *mutableArray = [NSMutableArray arrayWithCapacity:[(NSArray *)object count]];
+		for (id value in (NSArray *)object) {
+			[mutableArray addObject:SCMCMutableJSONObject(value)];
+		}
+		return mutableArray;
+	}
+
+	return object ?: [NSNull null];
+}
+
+static void SCMCSanitizeConfigurationDictionary(NSMutableDictionary *dictionary) {
+	static NSArray<NSString *> *blockedContainerTokens;
+	static NSArray<NSString *> *disabledBooleanTokens;
+	static NSArray<NSString *> *enabledBooleanTokens;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		blockedContainerTokens = @[
+			@"ad_banner",
+			@"ad_config",
+			@"ad_placement",
+			@"ad_target",
+			@"ads_krux",
+			@"audio_ad",
+			@"companion_ad",
+			@"display_ad",
+			@"promoted",
+			@"sponsored",
+			@"upsell"
+		];
+		disabledBooleanTokens = @[
+			@"can_show_ad",
+			@"display_ad",
+			@"enable_ad",
+			@"is_promoted",
+			@"is_sponsored",
+			@"show_ad",
+			@"should_show_ad",
+			@"upsell"
+		];
+		enabledBooleanTokens = @[
+			@"no_audio_ads"
+		];
+	});
+
+	for (id key in [dictionary.allKeys copy]) {
+		id value = dictionary[key];
+		NSString *keyString = [key isKindOfClass:[NSString class]] ? key : [key description];
+
+		if ([value isKindOfClass:[NSMutableDictionary class]]) {
+			SCMCSanitizeConfigurationDictionary(value);
+		} else if ([value isKindOfClass:[NSMutableArray class]]) {
+			for (id item in value) {
+				if ([item isKindOfClass:[NSMutableDictionary class]]) {
+					SCMCSanitizeConfigurationDictionary(item);
+				}
+			}
+		}
+
+		if (SCMCStringContainsAnyToken(keyString, blockedContainerTokens)) {
+			if ([value isKindOfClass:[NSMutableArray class]]) {
+				[dictionary setObject:@[] forKey:key];
+			} else if ([value isKindOfClass:[NSMutableDictionary class]]) {
+				[dictionary setObject:@{} forKey:key];
+			} else if ([value isKindOfClass:[NSNumber class]]) {
+				[dictionary setObject:@NO forKey:key];
+			} else if ([value isKindOfClass:[NSString class]]) {
+				[dictionary setObject:@"" forKey:key];
+			}
+			continue;
+		}
+
+		if ([value isKindOfClass:[NSNumber class]]) {
+			if (SCMCStringContainsAnyToken(keyString, disabledBooleanTokens)) {
+				[dictionary setObject:@NO forKey:key];
+			} else if (SCMCStringContainsAnyToken(keyString, enabledBooleanTokens)) {
+				[dictionary setObject:@YES forKey:key];
+			}
+		}
+	}
+}
+
+static NSData *SCMCSanitizedConfigurationData(NSData *data) {
+	if (![data isKindOfClass:[NSData class]] || data.length == 0) {
+		return data;
+	}
+
+	NSError *parseError = nil;
+	id jsonObject = [NSJSONSerialization JSONObjectWithData:data
+													options:0
+													  error:&parseError];
+	if (parseError || ![jsonObject isKindOfClass:[NSDictionary class]]) {
+		return data;
+	}
+
+	NSMutableDictionary *mutableObject = SCMCMutableJSONObject(jsonObject);
+	if (![mutableObject isKindOfClass:[NSMutableDictionary class]]) {
+		return data;
+	}
+
+	SCMCSanitizeConfigurationDictionary(mutableObject);
+
+	NSError *serializationError = nil;
+	NSData *sanitizedData = [NSJSONSerialization dataWithJSONObject:mutableObject
+															options:0
+															  error:&serializationError];
+	return serializationError || !sanitizedData ? data : sanitizedData;
+}
+
+%hook NSURLSession
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request
+							completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler {
+	if (!SCMCRequestIsConfigRequest(request) || !completionHandler) {
+		return %orig;
+	}
+
+	void (^wrappedCompletion)(NSData *, NSURLResponse *, NSError *) =
+		^(NSData *data, NSURLResponse *response, NSError *error) {
+			completionHandler(SCMCSanitizedConfigurationData(data), response, error);
+		};
+
+	return %orig(request, wrappedCompletion);
+}
+
+- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url
+						completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler {
+	if (!SCMCURLIsConfigURL(url) || !completionHandler) {
+		return %orig;
+	}
+
+	void (^wrappedCompletion)(NSData *, NSURLResponse *, NSError *) =
+		^(NSData *data, NSURLResponse *response, NSError *error) {
+			completionHandler(SCMCSanitizedConfigurationData(data), response, error);
+		};
+
+	return %orig(url, wrappedCompletion);
+}
+%end
+
+%hook NSData
++ (NSData *)dataWithContentsOfURL:(NSURL *)url {
+	NSData *data = %orig;
+	return SCMCURLIsConfigURL(url) ? SCMCSanitizedConfigurationData(data) : data;
+}
+
+- (instancetype)initWithContentsOfURL:(NSURL *)url {
+	NSData *data = %orig;
+	return SCMCURLIsConfigURL(url) ? SCMCSanitizedConfigurationData(data) : data;
+}
+%end
+
+%hook NSURLConnection
++ (NSData *)sendSynchronousRequest:(NSURLRequest *)request
+				 returningResponse:(NSURLResponse **)response
+							 error:(NSError **)error {
+	NSData *data = %orig;
+	return SCMCRequestIsConfigRequest(request) ? SCMCSanitizedConfigurationData(data) : data;
+}
+
++ (void)sendAsynchronousRequest:(NSURLRequest *)request
+						  queue:(NSOperationQueue *)queue
+			  completionHandler:(void (^)(NSURLResponse *response, NSData *data, NSError *connectionError))handler {
+	if (!SCMCRequestIsConfigRequest(request) || !handler) {
+		%orig;
+		return;
+	}
+
+	void (^wrappedHandler)(NSURLResponse *, NSData *, NSError *) =
+		^(NSURLResponse *response, NSData *data, NSError *connectionError) {
+			handler(response, SCMCSanitizedConfigurationData(data), connectionError);
+		};
+
+	%orig(request, queue, wrappedHandler);
+}
+%end
 
 %hook UpsellManager
 - (bool)canNotUpsell {
