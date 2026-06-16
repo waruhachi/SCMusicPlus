@@ -21,7 +21,14 @@ static BOOL SCMCURLIsConfigURL(NSURL *url) {
 		return NO;
 	}
 
-	return [url.absoluteString containsString:@"/configuration/ios"];
+	NSString *host = url.host.lowercaseString ?: @"";
+	NSString *path = url.path ?: @"";
+
+	if ([host isEqualToString:@"api-mobile.soundcloud.com"] && [path isEqualToString:@"/configuration/ios"]) {
+		return YES;
+	}
+
+	return NO;
 }
 
 static BOOL SCMCRequestIsConfigRequest(NSURLRequest *request) {
@@ -30,6 +37,23 @@ static BOOL SCMCRequestIsConfigRequest(NSURLRequest *request) {
 	}
 
 	return SCMCURLIsConfigURL(request.URL);
+}
+
+static BOOL SCMCJSONObjectLooksLikeConfiguration(id object) {
+	if (![object isKindOfClass:[NSDictionary class]]) {
+		return NO;
+	}
+
+	NSDictionary *dictionary = (NSDictionary *)object;
+	if ((dictionary[@"plan"] || dictionary[@"creator_plan"]) && dictionary[@"features"]) {
+		return YES;
+	}
+
+	if (dictionary[@"high_tier"] || dictionary[@"mid_tier"] || dictionary[@"plan_upsells"]) {
+		return YES;
+	}
+
+	return NO;
 }
 
 static id SCMCMutableJSONObject(id object) {
@@ -57,7 +81,11 @@ static void SCMCSanitizeConfigurationDictionary(NSMutableDictionary *dictionary)
 	static NSArray<NSString *> *blockedContainerTokens;
 	static NSArray<NSString *> *disabledBooleanTokens;
 	static NSArray<NSString *> *enabledBooleanTokens;
+	static NSDictionary<NSString *, NSDictionary *> *featureOverrides;
+	static NSDictionary<NSString *, id> *planOverrides;
+	static NSDictionary<NSString *, id> *creatorOverrides;
 	static dispatch_once_t onceToken;
+
 	dispatch_once(&onceToken, ^{
 		blockedContainerTokens = @[
 			@"ad_banner",
@@ -70,7 +98,10 @@ static void SCMCSanitizeConfigurationDictionary(NSMutableDictionary *dictionary)
 			@"display_ad",
 			@"promoted",
 			@"sponsored",
-			@"upsell"
+			@"upsell",
+			@"upsells",
+			@"ads_configuration",
+			@"ads_config"
 		];
 		disabledBooleanTokens = @[
 			@"can_show_ad",
@@ -80,11 +111,46 @@ static void SCMCSanitizeConfigurationDictionary(NSMutableDictionary *dictionary)
 			@"is_sponsored",
 			@"show_ad",
 			@"should_show_ad",
-			@"upsell"
 		];
 		enabledBooleanTokens = @[
 			@"no_audio_ads"
 		];
+		featureOverrides = @{
+			@"offline_sync": @{
+				@"enabled": @YES,
+				@"plans": @[]
+			},
+			@"no_audio_ads": @{
+				@"enabled": @YES,
+				@"plans": @[]
+			},
+			@"hq_audio": @{
+				@"enabled": @YES,
+				@"plans": @[]
+			},
+			@"system_playlist_in_library": @{
+				@"enabled": @YES
+			},
+			@"ads_krux": @{
+				@"enabled": @NO
+			},
+			@"new_home": @{
+				@"enabled": @NO
+			},
+			@"spotlight": @{
+				@"enabled": @YES
+			}
+		};
+		planOverrides = @{
+			@"plan_id": @"go-plus",
+			@"plan_name": @"SoundCloud Go+",
+			@"plan_upsells": @[],
+			@"upsells": @[]
+		};
+		creatorOverrides = @{
+			@"plan_id": @"pro-unlimited",
+			@"plan_name": @"Artist Pro"
+		};
 	});
 
 	for (id key in [dictionary.allKeys copy]) {
@@ -121,6 +187,36 @@ static void SCMCSanitizeConfigurationDictionary(NSMutableDictionary *dictionary)
 				[dictionary setObject:@YES forKey:key];
 			}
 		}
+
+		if ([keyString isEqualToString:@"features"] && [value isKindOfClass:[NSArray class]]) {
+			NSMutableArray *features = (NSMutableArray *)value;
+
+			for (id item in features) {
+				if (![item isKindOfClass:[NSMutableDictionary class]]) {
+					continue;
+				}
+
+				NSString *featureName = item[@"name"];
+				NSDictionary *featureOverride = featureOverrides[featureName];
+				if (featureOverride) {
+					[item addEntriesFromDictionary:featureOverride];
+				}
+			}
+
+			continue;
+		}
+
+		if ([keyString isEqualToString:@"plan"] && [value isKindOfClass:[NSMutableDictionary class]]) {
+			NSMutableDictionary *plan = (NSMutableDictionary *)value;
+			[plan addEntriesFromDictionary:planOverrides];
+			continue;
+		}
+
+		if ([keyString isEqualToString:@"creator_plan"] && [value isKindOfClass:[NSMutableDictionary class]]) {
+			NSMutableDictionary *creatorPlan = (NSMutableDictionary *)value;
+			[creatorPlan addEntriesFromDictionary:creatorOverrides];
+			continue;
+		}
 	}
 }
 
@@ -150,6 +246,61 @@ static NSData *SCMCSanitizedConfigurationData(NSData *data) {
 															  error:&serializationError];
 	return serializationError || !sanitizedData ? data : sanitizedData;
 }
+
+%hook NSUserDefaults
+
+- (BOOL)boolForKey:(NSString *)key {
+	if ([key isEqualToString:@"USER_FEATURE_hq_audio"]) {
+		return 1;
+	}
+
+	if ([key isEqualToString:@"USER_FEATURE_no_audio_ads"]) {
+		return 1;
+	}
+
+	if ([key isEqualToString:@"USER_FEATURE_new_home"]) {
+		return 1;
+	}
+
+	if ([key isEqualToString:@"USER_FEATURE_offline_sync"]) {
+		return 1;
+	}
+
+	if ([key isEqualToString:@"USER_FEATURE_spotlight"]) {
+		return 1;
+	}
+
+	return %orig;
+}
+
+- (NSInteger)integerForKey:(NSString *)key {
+	if ([key isEqualToString:@"PlanType"]) {
+		return 2;
+	}
+
+	return %orig;
+}
+
+%end
+
+%hook NSJSONSerialization
++ (id)JSONObjectWithData:(NSData *)data
+				 options:(NSJSONReadingOptions)opt
+				   error:(NSError **)error {
+	id jsonObject = %orig;
+	if (!SCMCJSONObjectLooksLikeConfiguration(jsonObject)) {
+		return jsonObject;
+	}
+
+	NSMutableDictionary *mutableObject = SCMCMutableJSONObject(jsonObject);
+	if (![mutableObject isKindOfClass:[NSMutableDictionary class]]) {
+		return jsonObject;
+	}
+
+	SCMCSanitizeConfigurationDictionary(mutableObject);
+	return mutableObject;
+}
+%end
 
 %hook NSURLSession
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request
@@ -184,12 +335,18 @@ static NSData *SCMCSanitizedConfigurationData(NSData *data) {
 %hook NSData
 + (NSData *)dataWithContentsOfURL:(NSURL *)url {
 	NSData *data = %orig;
-	return SCMCURLIsConfigURL(url) ? SCMCSanitizedConfigurationData(data) : data;
+	if (SCMCURLIsConfigURL(url)) {
+		return SCMCSanitizedConfigurationData(data);
+	}
+	return data;
 }
 
 - (instancetype)initWithContentsOfURL:(NSURL *)url {
 	NSData *data = %orig;
-	return SCMCURLIsConfigURL(url) ? SCMCSanitizedConfigurationData(data) : data;
+	if (SCMCURLIsConfigURL(url)) {
+		return SCMCSanitizedConfigurationData(data);
+	}
+	return data;
 }
 %end
 
