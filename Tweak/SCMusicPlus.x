@@ -39,6 +39,38 @@ static BOOL SCMCRequestIsConfigRequest(NSURLRequest *request) {
 	return SCMCURLIsConfigURL(request.URL);
 }
 
+static id SCMCUserDefaultsOverrideForKey(NSString *key) {
+	if (![key isKindOfClass:[NSString class]]) {
+		return nil;
+	}
+
+	if ([key isEqualToString:@"USER_FEATURE_hq_audio"]) {
+		return @YES;
+	}
+
+	if ([key isEqualToString:@"USER_FEATURE_no_audio_ads"]) {
+		return @YES;
+	}
+
+	if ([key isEqualToString:@"USER_FEATURE_new_home"]) {
+		return @YES;
+	}
+
+	if ([key isEqualToString:@"USER_FEATURE_offline_sync"]) {
+		return @YES;
+	}
+
+	if ([key isEqualToString:@"USER_FEATURE_spotlight"]) {
+		return @YES;
+	}
+
+	if ([key isEqualToString:@"PlanType"]) {
+		return @2;
+	}
+
+	return nil;
+}
+
 static BOOL SCMCJSONObjectLooksLikeConfiguration(id object) {
 	if (![object isKindOfClass:[NSDictionary class]]) {
 		return NO;
@@ -135,7 +167,7 @@ static void SCMCSanitizeConfigurationDictionary(NSMutableDictionary *dictionary)
 				@"enabled": @NO
 			},
 			@"new_home": @{
-				@"enabled": @NO
+				@"enabled": @YES
 			},
 			@"spotlight": @{
 				@"enabled": @YES
@@ -250,38 +282,82 @@ static NSData *SCMCSanitizedConfigurationData(NSData *data) {
 %hook NSUserDefaults
 
 - (BOOL)boolForKey:(NSString *)key {
-	if ([key isEqualToString:@"USER_FEATURE_hq_audio"]) {
-		return 1;
-	}
-
-	if ([key isEqualToString:@"USER_FEATURE_no_audio_ads"]) {
-		return 1;
-	}
-
-	if ([key isEqualToString:@"USER_FEATURE_new_home"]) {
-		return 1;
-	}
-
-	if ([key isEqualToString:@"USER_FEATURE_offline_sync"]) {
-		return 1;
-	}
-
-	if ([key isEqualToString:@"USER_FEATURE_spotlight"]) {
-		return 1;
+	id override = SCMCUserDefaultsOverrideForKey(key);
+	if (override) {
+		return [override boolValue];
 	}
 
 	return %orig;
 }
 
 - (NSInteger)integerForKey:(NSString *)key {
-	if ([key isEqualToString:@"PlanType"]) {
-		return 2;
+	id override = SCMCUserDefaultsOverrideForKey(key);
+	if (override) {
+		return [override integerValue];
 	}
 
 	return %orig;
 }
 
+- (id)objectForKey:(NSString *)key {
+	id override = SCMCUserDefaultsOverrideForKey(key);
+	return override ?: %orig;
+}
+
+- (id)valueForKey:(NSString *)key {
+	id override = SCMCUserDefaultsOverrideForKey(key);
+	return override ?: %orig;
+}
+
+- (NSDictionary *)dictionaryRepresentation {
+	NSMutableDictionary *dictionary = [%orig mutableCopy];
+	if (![dictionary isKindOfClass:[NSMutableDictionary class]]) {
+		return %orig;
+	}
+
+	dictionary[@"USER_FEATURE_hq_audio"] = @YES;
+	dictionary[@"USER_FEATURE_no_audio_ads"] = @YES;
+	dictionary[@"USER_FEATURE_new_home"] = @YES;
+	dictionary[@"USER_FEATURE_offline_sync"] = @YES;
+	dictionary[@"USER_FEATURE_spotlight"] = @YES;
+	dictionary[@"PlanType"] = @2;
+	return dictionary;
+}
+
 %end
+
+%hookf(Boolean, CFPreferencesGetAppBooleanValue, CFStringRef key, CFStringRef applicationID, Boolean *keyExistsAndHasValidFormat) {
+	id override = SCMCUserDefaultsOverrideForKey((__bridge NSString *)key);
+	if (override) {
+		if (keyExistsAndHasValidFormat) {
+			*keyExistsAndHasValidFormat = true;
+		}
+		return [override boolValue];
+	}
+
+	return %orig;
+}
+
+%hookf(CFIndex, CFPreferencesGetAppIntegerValue, CFStringRef key, CFStringRef applicationID, Boolean *keyExistsAndHasValidFormat) {
+	id override = SCMCUserDefaultsOverrideForKey((__bridge NSString *)key);
+	if (override) {
+		if (keyExistsAndHasValidFormat) {
+			*keyExistsAndHasValidFormat = true;
+		}
+		return [override integerValue];
+	}
+
+	return %orig;
+}
+
+%hookf(CFPropertyListRef, CFPreferencesCopyAppValue, CFStringRef key, CFStringRef applicationID) {
+	id override = SCMCUserDefaultsOverrideForKey((__bridge NSString *)key);
+	if (override) {
+		return CFRetain((__bridge CFPropertyListRef) override);
+	}
+
+	return %orig;
+}
 
 %hook NSJSONSerialization
 + (id)JSONObjectWithData:(NSData *)data
